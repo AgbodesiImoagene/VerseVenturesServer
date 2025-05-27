@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+pgvector
+psycopg2-binary
+sentence-transformers
+pydantic
+dotenv
+boto3
