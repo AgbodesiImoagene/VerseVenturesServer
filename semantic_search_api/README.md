@@ -10,6 +10,83 @@ A Flask-based API for semantic search using sentence transformers and FAISS for 
 - AWS Lambda deployment support
 - Environment-based configuration
 - Comprehensive test suite
+- **Semantic Search**: Search Bible verses using sentence transformers
+- **Multiple Bible Versions**: Support for KJV, ASV, NET, WEB, and more
+- **Dynamic Version Management**: Add new bible versions without code changes
+- **WebSocket Support**: Real-time search capabilities
+- **HTTP Endpoints**: RESTful API for search operations
+- **AWS Integration**: Temporary credential generation for AWS services
+- **CORS Support**: Cross-origin resource sharing enabled
+
+## Dynamic Bible Version Management
+
+The API now supports dynamic bible version management, allowing you to add new bible versions without requiring code changes or service restarts.
+
+### How It Works
+
+1. **Database-Driven**: Bible versions are detected by querying available database schemas
+2. **Caching**: Results are cached for 5 minutes to improve performance
+3. **Fallback**: If database is unavailable, falls back to default versions
+4. **Auto-Discovery**: Automatically detects new schemas that match bible version patterns
+
+### Managing Bible Versions
+
+Use the management script to add or remove bible versions:
+
+```bash
+# List all available bible versions
+python manage_bible_versions.py list
+
+# Add a new bible version (e.g., ESV)
+python manage_bible_versions.py add --version esv
+
+# Remove a bible version
+python manage_bible_versions.py remove --version esv
+```
+
+### Adding New Bible Versions
+
+1. **Create Schema**: The script automatically creates the required database schema
+2. **Create Tables**: Verses and embeddings tables are created with proper indexes
+3. **Load Data**: You'll need to populate the tables with verse data and embeddings
+4. **Auto-Detection**: The API will automatically detect and support the new version
+
+### Database Schema
+
+Each bible version uses its own schema with the following structure:
+
+```sql
+-- Schema: {version_name} (e.g., 'esv', 'niv')
+CREATE TABLE {version_name}.verses (
+    id SERIAL PRIMARY KEY,
+    book VARCHAR(50) NOT NULL,
+    chapter INTEGER NOT NULL,
+    verse INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE {version_name}.embeddings (
+    verse_id INTEGER REFERENCES {version_name}.verses(id),
+    encoding vector(768),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (verse_id)
+);
+```
+
+### Supported Version Codes
+
+The system supports these bible version codes:
+
+- `asv` - American Standard Version
+- `kjv` - King James Version
+- `net` - New English Translation
+- `web` - World English Bible
+- `esv` - English Standard Version
+- `niv` - New International Version
+- `nlt` - New Living Translation
+- `nasb` - New American Standard Bible
+- `nkjv` - New King James Version
 
 ## Project Structure
 

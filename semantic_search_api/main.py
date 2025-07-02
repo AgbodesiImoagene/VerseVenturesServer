@@ -27,11 +27,15 @@ api_key_header = APIKeyHeader(name="X-API-Key")
 app = FastAPI(title="Semantic Search API")
 model = SentenceTransformer("all-mpnet-base-v2")
 
+# Fallback versions if database is unavailable
+DEFAULT_SUPPORTED_BIBLE_VERSIONS = ["asv", "kjv", "net", "web"]
+
 
 class SearchRequest(BaseModel):
     query: str
     threshold: float = 0.6
     bible_version: str = "kjv"
+    max_results: int = 10
 
 
 class CredentialsResponse(BaseModel):
@@ -66,7 +70,9 @@ def get_conn(host=None, port=None, user=None, password=None, db=None):
     )
 
 
-async def semantic_search(conn, query: str, bible_version: str, threshold: float):
+async def semantic_search(
+    conn, query: str, bible_version: str, threshold: float, max_results: int
+):
     register_vector(conn)
     query_embedding = model.encode(query)
     cursor = conn.cursor()
@@ -79,17 +85,16 @@ async def semantic_search(conn, query: str, bible_version: str, threshold: float
             SELECT verse_id, encoding <=> %s AS distance
             FROM embeddings
         )
-        SELECT verse_id, 1 - distance
+        SELECT verse_id, 1 - distance AS similarity
         FROM distances
-        ORDER BY distance
-        LIMIT 10;
+        WHERE 1 - distance >= %s
+        ORDER BY similarity DESC
+        LIMIT %s;
     """,
-        (query_embedding,),
+        (query_embedding, threshold, max_results),
     )
 
     similar_verses = cursor.fetchall()
-
-    similar_verses = list(filter(lambda x: x[1] >= threshold, similar_verses))
 
     if similar_verses:
         ids = [x[0] for x in similar_verses]
@@ -121,7 +126,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 request_data = json.loads(data)
                 search_request = SearchRequest(**request_data)
 
-                if search_request.bible_version not in ["asv", "kjv", "net", "web"]:
+                if search_request.bible_version not in get_supported_versions():
                     await websocket.send_json({"error": "Invalid bible version"})
                     continue
 
@@ -134,6 +139,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     search_request.query,
                     search_request.bible_version,
                     search_request.threshold,
+                    search_request.max_results,
                 )
 
                 await websocket.send_json(results)
@@ -150,6 +156,11 @@ async def websocket_endpoint(websocket: WebSocket):
         conn.close()
 
 
+@app.get("/supported-bible-versions")
+async def get_supported_bible_versions():
+    return {"supported_bible_versions": get_supported_versions()}
+
+
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
@@ -159,7 +170,7 @@ async def health_check():
 async def http_semantic_search(search_request: SearchRequest):
     conn = get_conn()
     try:
-        if search_request.bible_version not in ["asv", "kjv", "net", "web"]:
+        if search_request.bible_version not in get_supported_versions():
             return {"error": "Invalid bible version"}
 
         if not search_request.query.strip():
@@ -170,6 +181,7 @@ async def http_semantic_search(search_request: SearchRequest):
             search_request.query,
             search_request.bible_version,
             search_request.threshold,
+            search_request.max_results,
         )
 
         return results
@@ -203,3 +215,53 @@ async def get_temporary_credentials(api_key: str = Depends(verify_api_key)):
         raise HTTPException(
             status_code=500, detail="Failed to generate temporary credentials"
         )
+
+
+def get_supported_bible_versions_from_db():
+    """Fetch supported bible versions from database"""
+    try:
+        conn = get_conn()
+        cursor = conn.cursor()
+
+        # Query to get available schemas (bible versions)
+        cursor.execute(
+            """
+            SELECT schema_name 
+            FROM information_schema.schemata 
+            WHERE schema_name IN ('asv', 'kjv', 'net', 'web', 'esv', 'niv', 'nlt')
+            AND schema_name != 'information_schema'
+            AND schema_name != 'pg_catalog'
+            ORDER BY schema_name
+        """
+        )
+
+        versions = [row[0] for row in cursor.fetchall()]
+        cursor.close()
+        conn.close()
+
+        return versions if versions else DEFAULT_SUPPORTED_BIBLE_VERSIONS
+    except Exception as e:
+        logger.warning(f"Failed to fetch bible versions from database: {e}")
+        return DEFAULT_SUPPORTED_BIBLE_VERSIONS
+
+
+def get_supported_versions():
+    """Get supported bible versions with caching"""
+    # Simple in-memory cache (could be enhanced with Redis)
+    if not hasattr(get_supported_versions, "_cache") or not hasattr(
+        get_supported_versions, "_cache_time"
+    ):
+        get_supported_versions._cache = None
+        get_supported_versions._cache_time = 0
+
+    # Cache for 5 minutes
+    current_time = datetime.now().timestamp()
+    if (
+        get_supported_versions._cache is None
+        or current_time - get_supported_versions._cache_time > 300
+    ):
+
+        get_supported_versions._cache = get_supported_bible_versions_from_db()
+        get_supported_versions._cache_time = current_time
+
+    return get_supported_versions._cache
